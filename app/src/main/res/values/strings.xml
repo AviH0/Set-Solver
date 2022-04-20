@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">set_solver</string>
+    <string name="permission_deny_text">Camera persmission denied. Exiting...</string>
+</resources>

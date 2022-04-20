@@ -1,0 +1,4 @@
+/build
+/src/test/res/out/*
+/libs/opencv-4.5.5-android-sdk
+/libs/opencv-4.5.5-android-sdk.zip
