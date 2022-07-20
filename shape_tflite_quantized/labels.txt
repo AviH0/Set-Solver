@@ -1,0 +1,4 @@
+0 Diamond
+1 Circle
+2 Squiggle
+3 Invalid
