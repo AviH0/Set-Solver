@@ -7,6 +7,8 @@ import android.graphics.BitmapFactory;
 import android.net.Uri;
 
 import com.avih.set_solver.R;
+import com.avih.set_solver.ml.ColorModel;
+import com.avih.set_solver.ml.NumberModel;
 import com.avih.set_solver.ml.ShapeModel;
 import com.avih.set_solver.set_game.SetCard;
 
@@ -43,15 +45,29 @@ import org.tensorflow.lite.support.tensorbuffer.TensorBuffer;
 import org.tensorflow.lite.support.tensorbuffer.TensorBufferFloat;
 
 
+import androidx.annotation.NonNull;
+
 import static org.bytedeco.opencv.global.opencv_core.*;
 import static org.bytedeco.opencv.global.opencv_imgcodecs.imread;
+import static org.bytedeco.opencv.global.opencv_imgcodecs.imwrite;
 import static org.bytedeco.opencv.global.opencv_imgproc.*;
 
 public class ImageProcessor {
 
     private Mat diamond_mat, squiggle_mat, round_mat, cardHist;
     private Context _context;
-    private ShapeModel model;
+    private ShapeModel shapeModel;
+    private NumberModel numberModel;
+    private ColorModel colorModel;
+
+
+    @Override
+    protected void finalize() throws Throwable {
+        shapeModel.close();
+        numberModel.close();
+        colorModel.close();
+        super.finalize();
+    }
 
     public ImageProcessor(Context c, int diamond_id, int round_id, int squiggle_id)
     {
@@ -66,12 +82,14 @@ public class ImageProcessor {
         FloatPointer histRange = new FloatPointer(0f, 255f);
         cardHist = calcMatHist(squiggle_mat);
         try {
-            model = ShapeModel.newInstance(_context);
+            shapeModel = ShapeModel.newInstance(_context);
+            numberModel = NumberModel.newInstance(_context);
+            colorModel = ColorModel.newInstance(_context);
         } catch (IOException e) {
             e.printStackTrace();
         } catch (UnsatisfiedLinkError e)
         {
-            e.printStackTrace();
+//            e.printStackTrace();
         }
     }
 
@@ -79,12 +97,14 @@ public class ImageProcessor {
     private static final int[] WHITE = {255, 255, 255};
     private static final int[] BLACK = {0, 0, 0};
 
-    public SetCard.Shape getCardShape(@ByRef Mat img)
+    public SetCard.Shape getCardShape(@ByRef Mat card)
     {
-            if (model == null){
+            if (shapeModel == null){
                 return null;
             }
-            img.convertTo(img, CV_8U);
+            Mat img = card.clone();
+            cvtColor(img, img, COLOR_RGB2GRAY);
+            img.convertTo(img, CV_8UC3);
             // Creates inputs for reference.
 //            TensorBuffer inputFeature0 = TensorBuffer.createFixedSize(new int[]{1, 224, 224, 3}, DataType.UINT8);
             TensorImage input = TensorImage.fromBitmap(matToBitmap(img));
@@ -94,7 +114,7 @@ public class ImageProcessor {
 //            inputFeature0.loadBuffer(img.asByteBuffer());
 
             // Runs model inference and gets result.
-            ShapeModel.Outputs outputs = model.process(input.getTensorBuffer());
+            ShapeModel.Outputs outputs = shapeModel.process(input.getTensorBuffer());
             TensorBuffer outputFeature0 = outputs.getOutputFeature0AsTensorBuffer();
 
 
@@ -106,13 +126,85 @@ public class ImageProcessor {
             }
             if (pred[1] > 150)
             {
-                return SetCard.Shape.SQUIGGLE;
+                return SetCard.Shape.CIRCLE;
             }
             if (pred[2] > 150)
             {
-                return SetCard.Shape.CIRCLE;
+                return SetCard.Shape.SQUIGGLE;
             }
             return null;
+
+    }
+
+    public SetCard.Number getCardNumber(@ByRef Mat card)
+    {
+        if (numberModel == null){
+            return null;
+        }
+        Mat img = card.clone();
+        img.convertTo(img, CV_8U);
+        // Creates inputs for reference.
+//            TensorBuffer inputFeature0 = TensorBuffer.createFixedSize(new int[]{1, 224, 224, 3}, DataType.UINT8);
+        TensorImage input = TensorImage.fromBitmap(matToBitmap(img));
+
+//            TensorBuffer floatBuffer = TensorBufferFloat.createFrom(input.getTensorBuffer(), DataType.FLOAT32);
+//            input.load(floatBuffer);
+//            inputFeature0.loadBuffer(img.asByteBuffer());
+
+        // Runs model inference and gets result.
+        NumberModel.Outputs outputs = numberModel.process(input.getTensorBuffer());
+        TensorBuffer outputFeature0 = outputs.getOutputFeature0AsTensorBuffer();
+
+        float[] pred = outputFeature0.getFloatArray();
+        if (pred[0] > 150)
+        {
+            return SetCard.Number.SINGLE;
+        }
+        if (pred[1] > 150)
+        {
+            return SetCard.Number.PAIR;
+        }
+        if (pred[2] > 150)
+        {
+            return SetCard.Number.TRIPPLE;
+        }
+        return null;
+
+    }
+
+    public SetCard.Color getCardColor(@ByRef Mat card)
+    {
+        if (colorModel == null){
+            return null;
+        }
+        Mat img = card.clone();
+        img.convertTo(img, CV_8U);
+        // Creates inputs for reference.
+//            TensorBuffer inputFeature0 = TensorBuffer.createFixedSize(new int[]{1, 224, 224, 3}, DataType.UINT8);
+        TensorImage input = TensorImage.fromBitmap(matToBitmap(img));
+
+//            TensorBuffer floatBuffer = TensorBufferFloat.createFrom(input.getTensorBuffer(), DataType.FLOAT32);
+//            input.load(floatBuffer);
+//            inputFeature0.loadBuffer(img.asByteBuffer());
+
+        // Runs model inference and gets result.
+        ColorModel.Outputs outputs = colorModel.process(input.getTensorBuffer());
+        TensorBuffer outputFeature0 = outputs.getOutputFeature0AsTensorBuffer();
+
+        float[] pred = outputFeature0.getFloatArray();
+        if (pred[0] > 150)
+        {
+            return SetCard.Color.GREEN;
+        }
+        if (pred[1] > 150)
+        {
+            return SetCard.Color.RED;
+        }
+        if (pred[2] > 150)
+        {
+            return SetCard.Color.PURPLE;
+        }
+        return null;
 
     }
 
@@ -135,137 +227,70 @@ public class ImageProcessor {
         return hist;
     }
 
-    public boolean isCard(Mat card)
-    {
-        Mat hist = calcMatHist(card.clone());
-        return compareHist(hist, cardHist, HISTCMP_CHISQR) >= 20_000;
-    }
-
-    public static Mat getContourRect(MatVector contours, int index)
-    {
-        Mat approx = new Mat(CV_32F);
-        approxPolyDP(contours.get(index), approx, 0.01 * arcLength(contours.get(index), true), true);
-        //calculate the center of mass of our contour image using moments
-        Moments moment = moments(approx);
-        int x = (int) (moment.m10() / moment.m00());
-        int y = (int) (moment.m01() / moment.m00());
-
-//SORT POINTS RELATIVE TO CENTER OF MASS
-
-        Mat sortedSrcPoints = new Mat(new Size(2, 4), CV_8U);
-        Indexer indexer = approx.createIndexer();
-        Indexer sortedSrcPointsIndexer = sortedSrcPoints.createIndexer();
-        for(int i=0; i<approx.rows(); i++){
-            int datax = (int) indexer.getDouble(0, i, 0);
-            int datay = (int) indexer.getDouble(0, i, 1);
-            if(datax < x && datay < y){
-                sortedSrcPointsIndexer.putDouble(new long[]{0, 0}, datax);
-                sortedSrcPointsIndexer.putDouble(new long[]{0, 1}, datay);
-            }else if(datax > x && datay < y){
-                sortedSrcPointsIndexer.putDouble(new long[]{1, 0}, datax);
-                sortedSrcPointsIndexer.putDouble(new long[]{1, 1}, datay);
-            }else if (datax < x && datay > y){
-                sortedSrcPointsIndexer.putDouble(new long[]{2, 0}, datax);
-                sortedSrcPointsIndexer.putDouble(new long[]{2, 1}, datay);
-            }else if (datax > x && datay > y){
-                sortedSrcPointsIndexer.putDouble(new long[]{3, 0}, datax);
-                sortedSrcPointsIndexer.putDouble(new long[]{3, 1}, datay);
-            }
-        }
-        double height = Math.abs(sortedSrcPointsIndexer.getDouble(0, 1) - sortedSrcPointsIndexer.getDouble(2, 1));
-        double width = Math.abs(sortedSrcPointsIndexer.getDouble(0, 0) - sortedSrcPointsIndexer.getDouble(1, 0));
-//        if (height > width)
-//        {
-//            double datax = sortedSrcPointsIndexer.getDouble(3, 0);
-//            double datay = sortedSrcPointsIndexer.getDouble(3, 1);
-////            sortedSrcPointsIndexer.putDouble(new long[]{3, 0}, sortedSrcPointsIndexer.getDouble(0, 0));
-////            sortedSrcPointsIndexer.putDouble(new long[]{3, 1}, sortedSrcPointsIndexer.getDouble(0, 1));
-////
-////            sortedSrcPointsIndexer.putDouble(new long[]{0, 0}, datax);
-////            sortedSrcPointsIndexer.putDouble(new long[]{0, 1}, datay);
-//
-//            datax = sortedSrcPointsIndexer.getDouble(2, 0);
-//            datay = sortedSrcPointsIndexer.getDouble(2, 1);
-//            sortedSrcPointsIndexer.putDouble(new long[]{2, 0}, sortedSrcPointsIndexer.getDouble(1, 0));
-//            sortedSrcPointsIndexer.putDouble(new long[]{2, 1}, sortedSrcPointsIndexer.getDouble(1, 1));
-//
-//            sortedSrcPointsIndexer.putDouble(new long[]{1, 0}, datax);
-//            sortedSrcPointsIndexer.putDouble(new long[]{1, 1}, datay);
-//        }
-
-        return sortedSrcPoints;
+    public boolean isCard(Mat cardContour) {
+        double isCardValue = contourArea(cardContour);
+        return (isCardValue > 5_000);
     }
 
     public static Mat unWarpCard(@ByRef Mat src, @ByRef MatVector contours, int index)
     {
-//        Mat contour = Mat.zeros(src.size(0), src.size(1), CV_8U).asMat();
-//        drawContours(contour, contours, index, Scalar.WHITE);
-//        Rect boundingRect = boundingRect(contour);
-//        contour = contour.colRange(
-//                boundingRect.x(),  boundingRect.x() + boundingRect.width()).rowRange(boundingRect.y(), boundingRect.y() + boundingRect.height());
-//        src = src.colRange(
-//                boundingRect.x(), boundingRect.x() +  boundingRect.width()).rowRange(boundingRect.y(), boundingRect.y() + boundingRect.height());
 
+        RotatedRect destRect = new RotatedRect(new Point2f(0, 0), new Point2f(0, 100), new Point2f(224, 100));
 
-        Mat rect = new Mat(new Size(2, 4), CV_32F, new FloatPointer(0, 0, 224, 0, 0, 100, 224, 100));
+        Point2f sortedSrcPoints = getOrientedContourRect(contours, index);
 
-        Mat approx = new Mat(CV_32F);
-        approxPolyDP(contours.get(index), approx, 0.01 * arcLength(contours.get(index), true), true);
-        //calculate the center of mass of our contour image using moments
-        Moments moment = moments(approx);
-        int x = (int) (moment.m10() / moment.m00());
-        int y = (int) (moment.m01() / moment.m00());
+        Point2f destPoints = new Point2f(8);
+        destRect.points(destPoints);
 
-//SORT POINTS RELATIVE TO CENTER OF MASS
-
-        Mat sortedSrcPoints = new Mat(new Size(2, 4), CV_32F);
-        Indexer indexer = approx.createIndexer();
-        Indexer sortedSrcPointsIndexer = sortedSrcPoints.createIndexer();
-        for(int i=0; i<approx.rows(); i++){
-            int datax = (int) indexer.getDouble(0, i, 0);
-            int datay = (int) indexer.getDouble(0, i, 1);
-            if(datax < x && datay < y){
-                sortedSrcPointsIndexer.putDouble(new long[]{0, 0}, datax);
-                sortedSrcPointsIndexer.putDouble(new long[]{0, 1}, datay);
-            }else if(datax > x && datay < y){
-                sortedSrcPointsIndexer.putDouble(new long[]{1, 0}, datax);
-                sortedSrcPointsIndexer.putDouble(new long[]{1, 1}, datay);
-            }else if (datax < x && datay > y){
-                sortedSrcPointsIndexer.putDouble(new long[]{2, 0}, datax);
-                sortedSrcPointsIndexer.putDouble(new long[]{2, 1}, datay);
-            }else if (datax > x && datay > y){
-                sortedSrcPointsIndexer.putDouble(new long[]{3, 0}, datax);
-                sortedSrcPointsIndexer.putDouble(new long[]{3, 1}, datay);
-            }
-        }
-        double height = Math.abs(sortedSrcPointsIndexer.getDouble(0, 1) - sortedSrcPointsIndexer.getDouble(2, 1));
-        double width = Math.abs(sortedSrcPointsIndexer.getDouble(0, 0) - sortedSrcPointsIndexer.getDouble(1, 0));
-        if (height > width)
-        {
-            double datax = sortedSrcPointsIndexer.getDouble(3, 0);
-            double datay = sortedSrcPointsIndexer.getDouble(3, 1);
-//            sortedSrcPointsIndexer.putDouble(new long[]{3, 0}, sortedSrcPointsIndexer.getDouble(0, 0));
-//            sortedSrcPointsIndexer.putDouble(new long[]{3, 1}, sortedSrcPointsIndexer.getDouble(0, 1));
-//
-//            sortedSrcPointsIndexer.putDouble(new long[]{0, 0}, datax);
-//            sortedSrcPointsIndexer.putDouble(new long[]{0, 1}, datay);
-
-            datax = sortedSrcPointsIndexer.getDouble(2, 0);
-            datay = sortedSrcPointsIndexer.getDouble(2, 1);
-            sortedSrcPointsIndexer.putDouble(new long[]{2, 0}, sortedSrcPointsIndexer.getDouble(1, 0));
-            sortedSrcPointsIndexer.putDouble(new long[]{2, 1}, sortedSrcPointsIndexer.getDouble(1, 1));
-
-            sortedSrcPointsIndexer.putDouble(new long[]{1, 0}, datax);
-            sortedSrcPointsIndexer.putDouble(new long[]{1, 1}, datay);
-        }
-
-        Mat perspectiveTransform = getPerspectiveTransform(sortedSrcPoints, rect);
+        Mat perspectiveTransform = getPerspectiveTransform(sortedSrcPoints, destPoints);
         Mat dst = Mat.zeros(src.size(), src.type()).asMat();
         warpPerspective(src, dst, perspectiveTransform, new Size(224, 100));
-//        resize(dst, dst, new Size(200, 200));
+
         Mat final_result = new Mat(new Size(224, 224));
         copyMakeBorder(dst, final_result, 62, 62, 0, 0, BORDER_CONSTANT, Scalar.all(0));
+
         return final_result;
+    }
+
+    @NonNull
+    public static RotatedRect getContourRect(@ByRef MatVector contours, int index) {
+        return minAreaRect(contours.get(index));
+    }
+
+    @NonNull
+    private static Point2f getOrientedContourRect(@ByRef MatVector contours, int index) {
+        Point2f sortedSrcPoints = new Point2f(8);
+        RotatedRect rotatedRect = getContourRect(contours, index);
+        Mat contour = contours.get(index);
+//        double epsilon = 0.1*arcLength(contour,true);
+//        Mat approx = new Mat();
+//        approxPolyDP(contour,approx, epsilon,true);
+        rotatedRect.points(sortedSrcPoints);
+//        if (approx.size(1) < 4)
+//        {
+//            return sortedSrcPoints;
+//        }
+//        Indexer indexer = approx.createIndexer();
+//        for (int i = 0; i < 4; i++)
+//        {
+//            sortedSrcPoints.put(i*2, (float) indexer.getDouble(0,i, 0));
+//            sortedSrcPoints.put((i*2)+1, (float) indexer.getDouble(0,i, 1));
+//        }
+        if(rotatedRect.size().height() > rotatedRect.size().width())
+        {
+                float x0 = sortedSrcPoints.get(0);
+                float y0 = sortedSrcPoints.get(1);
+            for(int i=0; i<3; i++)
+            {
+                float x = sortedSrcPoints.get((2 * (i+1)) % 8);
+                float y = sortedSrcPoints.get(((2 * (i+1)) + 1) % 8);
+                sortedSrcPoints.put((2 * (i)) % 8, x);
+                sortedSrcPoints.put(((2 * (i)) + 1) % 8, y);
+            }
+            sortedSrcPoints.put(6, x0);
+            sortedSrcPoints.put(7, y0);
+        }
+        return sortedSrcPoints;
     }
 
     public static Mat procImage(Mat src) {
@@ -363,36 +388,67 @@ public class ImageProcessor {
         imgLaplacian.convertTo(imgLaplacian, CV_8UC3);
         // imshow( "Laplace Filtered Image", imgLaplacian );
 //        imshow("New Sharped Image", imgResult);
-
         src = imgResult; // copy back
+
         // Create binary image from source image
         Mat bw = new Mat();
-        cvtColor(src, bw, CV_BGR2GRAY);
-        threshold(bw, bw, 40, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
+        cvtColor(src, bw, CV_RGBA2GRAY);
+//        Mat dilateKernel = getStructuringElement(CV_SHAPE_ELLIPSE, new Size(3, 3));
+//        equalizeHist(bw, bw);
+//        erode(bw, bw, dilateKernel);
+//        adaptiveThreshold(bw, bw, 255, ADAPTIVE_THRESH_MEAN_C, THRESH_BINARY, 5, 10);
+//        erode(bw, bw, dilateKernel);
+        threshold(bw, bw, 1, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
 //        imshow("Binary Image", bw);
-
+        final String OUTPUT_PATH = "C:\\Users\\Avinoam\\AndroidStudioProjects\\set_solver\\app\\src\\test\\res\\";
+        imwrite(OUTPUT_PATH + "img_bw.jpg", bw);
         // Perform the distance transform algorithm
         Mat dist = new Mat(bw);
-//        distanceTransform(bw, dist, CV_DIST_L2, 3);
+        distanceTransform(bw, dist, CV_DIST_L2, 3);
         // Normalize the distance image for range = {0.0, 1.0}
         // so we can visualize and threshold it
-        normalize(dist, dist, 0, 1., NORM_MINMAX, -1, null);
+        normalize(bw, dist, 0, 1., NORM_MINMAX, -1, null);
 //        imshow("Distance Transform Image", dist);
-
         // Threshold to obtain the peaks
         // This will be the markers for the foreground objects
         threshold(dist, dist, .1, 1., CV_THRESH_BINARY);
         // Dilate a bit the dist image
-        Mat kernel1 = Mat.ones(3, 3, CV_8UC1).asMat();
-        dilate(dist, dist, kernel1);
+//        Mat kernel1 = Mat.ones(3, 3, CV_8UC1).asMat();
+//        dilate(dist, dist, kernel1);
 //        imshow("Peaks", dist);
         // Create the CV_8U version of the distance image
         // It is needed for findContours()
         Mat dist_8u = new Mat();
-        dist.convertTo(dist_8u, CV_8U);
+        dist.convertTo(dist_8u, CV_8UC1);
         // Find total markers
         MatVector contours = new MatVector();
-        findContours(dist_8u, contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
+        findContours(dist_8u, contours, new Mat(), RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
+
+        src.convertTo(src, CV_8UC3);
+        // Create the marker image for the watershed algorithm
+        Mat markers = Mat.zeros(src.size(), CV_32SC1).asMat();
+        // Draw the foreground markers
+        for (int i = 0; i < contours.size(); i++)
+            if (contourArea(contours.get(i)) > 500)
+            drawContours(markers, contours, i, Scalar.all((i) + 1));
+//        if (true)
+//        return test;
+        // Draw the background marker
+//        circle(markers, new Point(5, 5), 3, RGB(255, 255, 255));
+////        imshow("Markers", multiply(markers, 10000).asMat());
+//
+//        // Perform the watershed algorithm
+//        watershed(src, markers);
+//        contours = new MatVector();
+//        markers.convertTo(markers, CV_8UC1);
+//        bitwise_not(markers, markers);
+//        threshold(markers, markers, .5, 1., CV_THRESH_BINARY);
+//        dilate(markers, markers, kernel1);
+//        findContours(markers, contours, new Mat(), CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
+//        Mat test = Mat.zeros(src.size(), CV_8U).asMat();
+//        for (int i = 0; i < contours.size(); i++)
+//            drawContours(test, contours, i, Scalar.WHITE);
+        imwrite(OUTPUT_PATH + "img_res.jpg", markers);
         return contours;
     }
 
@@ -408,6 +464,7 @@ public class ImageProcessor {
         assert ret.address() != src.address();
         src.deallocate(false);
 //        ret.deallocate(false);
+        cvtColor(ret, ret, COLOR_BGRA2RGBA);
         return ret;
     }
 
@@ -415,7 +472,7 @@ public class ImageProcessor {
     {
         Mat copy = mat.clone();
         copy.deallocate(false);
-        Bitmap bitmap = Bitmap.createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_4444);
+        Bitmap bitmap = Bitmap.createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888);
         org.opencv.core.Mat src = new org.opencv.core.Mat(copy.address());
         Utils.matToBitmap(src, bitmap);
 
