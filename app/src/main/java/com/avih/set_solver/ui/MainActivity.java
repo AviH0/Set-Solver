@@ -113,8 +113,6 @@ public class MainActivity extends AppCompatActivity implements PreviewOverlay {
             public void run() {
                 try {
 
-
-
                     ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
                     Preview preview = new Preview.Builder().build();
 //                new CameraSelector.Builder().
@@ -122,13 +120,21 @@ public class MainActivity extends AppCompatActivity implements PreviewOverlay {
 
 
                     ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-                            .setOutputImageRotationEnabled(false)
+                            .setOutputImageRotationEnabled(true)
+                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                             .setTargetResolution(new Size(viewFinder.getWidth()/4, viewFinder.getHeight()/4))
 //                            .setTargetAspectRatio(AspectRatio.RATIO_16_9)
                             .build();
-                    imageAnalysis.setAnalyzer(cameraExecutor, new Analyzer(MainActivity.this, MainActivity.this));
                     cameraProvider.unbindAll();
                     Camera camera = cameraProvider.bindToLifecycle(MainActivity.this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis);
+
+                    viewFinder.setOnClickListener(new View.OnClickListener() {
+                        @Override
+                        public void onClick(View view) {
+                            imageAnalysis.setAnalyzer(cameraExecutor, new Analyzer(MainActivity.this, MainActivity.this));
+                        }
+                    });
+
 
                     preview.setSurfaceProvider(viewFinder.getSurfaceProvider());
                 } catch (ExecutionException e) {
@@ -160,6 +166,7 @@ public class MainActivity extends AppCompatActivity implements PreviewOverlay {
     private class Analyzer implements ImageAnalysis.Analyzer {
         private CardProcessor cardProc;
         private PreviewOverlay previewOverlay;
+        private boolean done = false;
 
         public Analyzer(Context c, PreviewOverlay callback) {
             cardProc = new CardProcessor(c);
@@ -169,11 +176,15 @@ public class MainActivity extends AppCompatActivity implements PreviewOverlay {
         @SuppressLint("UnsafeOptInUsageError")
         @Override
         public void analyze(@NonNull ImageProxy image) {
+            if (done) {
+                image.close();
+                return;
+            }
             Bitmap overlay = cardProc.processImage(image.getImage(), new Size(overlayView.getWidth(), overlayView.getHeight()));
-            previewOverlay.overlay(overlay);
             image.close();
+            done = true;
+            previewOverlay.overlay(overlay);
         }
-
     }
 
 
