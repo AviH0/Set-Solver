@@ -9,4 +9,18 @@ public class SetCard {
     private Shape shape;
     private Color color;
     private Number number;
+
+    public SetCard(Shape shape, Color color, Number number) {
+        this.shape = shape;
+        this.color = color;
+        this.number = number;
+    }
+
+    @Override
+    public String toString() {
+        return "SetCard_" +
+                 shape +
+                "_" + color +
+                "_" + number;
+    }
 }
